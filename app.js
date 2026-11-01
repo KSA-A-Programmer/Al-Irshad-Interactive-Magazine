@@ -768,7 +768,7 @@ function go(delta){
  const target=page+delta;
  if(target<1||target>TOTAL)return;
  playTurnSound();
- showPageTurn(delta);
+ showPageTurn(-delta);
  page=target;draw();
  // DO NOT scroll: keep exactly the same magazine reading position.
 }
