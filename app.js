@@ -1,50 +1,270 @@
-'use strict';
-const TOTAL=29, KEY='madrasatuna-issue2-v1';
-let page=1,mode='browse',state=JSON.parse(localStorage.getItem(KEY)||'{"answers":{},"manual":{}}');
-const $=id=>document.getElementById(id), img=$('pageImage'), overlay=$('overlay');
-// Coordinates are percentages of the ORIGINAL page. Every overlay is transparent and removable.
-const regions={
- 8:[['text',69,22,23,8,'قصة الأمانة']],
- 10:[['text',11,92,76,4,'سؤال الأمانة']],
- 17:[...Array.from({length:4},(_,r)=>[['tick',20.9,78.2+r*3.45,3.8,2.7,`صح ${r+1}`],['tick',9.6,78.2+r*3.45,3.8,2.7,`خطأ ${r+1}`]]).flat()],
- 19:[...Array.from({length:5},(_,c)=>Array.from({length:4},(_,r)=>['tick',11.3+c*11.8,74.5+r*4.7,4.7,3.5,`النجوم ${c+1}-${r+1}`])).flat()],
- 20:[...Array.from({length:8},(_,i)=>['tick',67.3+i*3.9,37.1,3.3,4.2,`كوب الماء ${i+1}`]),['text',5,54,31,5,'سؤال الأسبوع']],
- 23:[...Array.from({length:4},(_,i)=>['text',12,34.2+i*4.9,48,3.7,`لغز العدد ${i+1}`]),...Array.from({length:3},(_,i)=>['text',11,81.0+i*4.6,34,3.5,`أكملي النمط ${i+1}`]),['text',52,64,36,4,'الشفرة السرية']],
- 24:[
-   ...Array.from({length:6},(_,i)=>['cell',40.5+i*7.5,27.0,7.4,4.7,`أفقي أعلى ${i+1}`]),
-   ...Array.from({length:3},(_,i)=>['cell',9.0,27+i*4.9,7.4,4.7,`عمودي يسار ${i+1}`]),
-   ...Array.from({length:3},(_,i)=>['cell',24.0+i*7.5,41.7,7.4,4.7,`أفقي يسار ${i+1}`]),
-   ...Array.from({length:3},(_,i)=>['cell',48.0,31.9+i*4.9,7.4,4.7,`عمودي وسط ${i+1}`]),
-   ...Array.from({length:3},(_,i)=>['cell',63.0,31.9+i*4.9,7.4,4.7,`عمودي ثان ${i+1}`]),
-   ...Array.from({length:4},(_,i)=>['cell',86.0,31.9+i*4.9,7.4,4.7,`عمودي يمين ${i+1}`]),
-   ...Array.from({length:2},(_,i)=>['cell',71+i*7.5,46.6,7.4,4.7,`أفقي أسفل ${i+1}`])
-  ],
- 26:[...Array.from({length:16},(_,i)=>['cell',11+(i%4)*6.7,72+Math.floor(i/4)*4.0,6,3.5,`شبكة ${i+1}`])],
- 27:[['text',12,80,45,8,'مشاركة الطالبة']]
-};
-function idFor(i){return `${page}:${i}`}
-function persist(){localStorage.setItem(KEY,JSON.stringify(state))}
-function note(msg){$('notice').textContent=msg}
-function setMode(m){mode=m;overlay.className='overlay '+(m==='write'?'write-mode':m==='check'?'check-mode':'');for(const [id,v] of [['write','write'],['check','check'],['cancel','browse']])$(id).classList.toggle('active',v===m)}
-function draw(){img.src=`pages/${String(page).padStart(2,'0')}.jpg`;img.alt=`الصفحة ${page} من المجلة`;$('counter').textContent=`${page} / ${TOTAL}`;overlay.innerHTML='';
- (regions[page]||[]).forEach((r,i)=>{let [type,x,y,w,h,label]=r,id=idFor(i),el=document.createElement(type==='tick'?'button':'input');el.className=type==='tick'?'tick':type==='cell'?'field cell':'field';el.style.cssText=`left:${x}%;top:${y}%;width:${w}%;height:${h}%`;if(type==='tick')el.type='button';el.title=label;el.setAttribute('aria-label',label);
- if(type!=='tick'){el.dir='rtl';if(type==='cell'){el.maxLength=1;el.inputMode='text';} el.value=state.answers[id]||'';el.addEventListener('input',()=>{state.answers[id]=el.value;persist()})}else{el.classList.toggle('selected',!!state.answers[id]);el.onclick=()=>{state.answers[id]=!state.answers[id];persist();el.classList.toggle('selected',state.answers[id])}}overlay.appendChild(el)});
- (state.manual[page]||[]).forEach((m,i)=>{const el=document.createElement('div');el.className='manual';el.style.cssText=`left:${m.x}%;top:${m.y}%;width:${m.w||12}%;min-height:2%;font-size:clamp(10px, ${Math.round(27*.55)}px, 18px)`;el.textContent=m.text;el.title='اضغطي لتعديل أو حذف الإضافة';el.onclick=()=>{const v=prompt('عدّلي النص، أو امسحيه بالكامل لحذف الإضافة:',m.text);if(v===null)return;if(v==='')state.manual[page].splice(i,1);else m.text=v;persist();draw()};overlay.appendChild(el)});
+ 'use strict';
+const TOTAL = 29;
+const KEY = 'madrasatuna-issue2-v1'; // Keep existing answers and saved selections.
+const GOOGLE_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzHnNXtT7FXhmr2o2UjI9cpzZVoSaUHn_JRV2KNxgzb0DKsSeTXCmAi-BfBrinp/exec';
+const $ = id => document.getElementById(id);
+const img = $('pageImage');
+const overlay = $('overlay');
+let page = 1, mode = 'browse';
+let lastEditedKey = null;
+let state;
+try { state = JSON.parse(localStorage.getItem(KEY) || '{}'); } catch { state = {}; }
+state.answers = state.answers && typeof state.answers === 'object' ? state.answers : {};
+state.manual = state.manual && typeof state.manual === 'object' ? state.manual : {};
+
+// The artwork is never modified. Areas below are mapped to the exact printed boxes.
+// Reference artwork (each page): 1347 × 1908 px, displayed here on a 1022 × 1448 reference canvas.
+const REF_W = 1022, REF_H = 1448;
+function box(type,cx,cy,w,h,label,extra={}) {
+ return {type,x:100*(cx-w/2)/REF_W,y:100*(cy-h/2)/REF_H,
+  w:100*w/REF_W,h:100*h/REF_H,label,...extra};
 }
-$('next').onclick=()=>{if(page<TOTAL){page++;draw()}};$('prev').onclick=()=>{if(page>1){page--;draw()}};
-$('write').onclick=()=>setMode('write');$('check').onclick=()=>setMode('check');$('cancel').onclick=()=>setMode('browse');
-overlay.addEventListener('click',e=>{if(mode==='browse'||e.target!==overlay)return;const b=overlay.getBoundingClientRect(),x=(e.clientX-b.left)/b.width*100,y=(e.clientY-b.top)/b.height*100;const text=mode==='check'?'✓':prompt('اكتبي الإجابة التي تريدين إضافتها هنا:');if(text===null||!text.trim())return;(state.manual[page]??=[]).push({x:Math.min(92,x),y:Math.min(96,y),text,size:mode==='check'?18:Math.min(24,+$('scale').value),w:mode==='check'?4:Math.min(38,Math.max(12,text.length*2))});persist();draw();setMode('browse')});
-$('undo').onclick=()=>{const a=state.manual[page]||[];if(a.length){a.pop();persist();draw()}else note('لا توجد إضافات يدوية لحذفها في هذه الصفحة.')};
-$('reset').onclick=()=>{if(confirm('هل تريدين حذف جميع الإجابات المحفوظة على هذا الجهاز؟')){state={answers:{},manual:{}};persist();draw()}};
-function printElement(tag,cl,css,txt,parent){const el=document.createElement(tag);el.className=cl;el.style.cssText=css;el.textContent=txt;parent.appendChild(el)}
-$('pdf').onclick=()=>{const root=$('printArea');root.innerHTML='';for(let p=1;p<=TOTAL;p++){let container=document.createElement('div');container.className='print-page';let pic=document.createElement('img');pic.src=`pages/${String(p).padStart(2,'0')}.jpg`;container.appendChild(pic);let layer=document.createElement('div');layer.className='print-layer';container.appendChild(layer);(regions[p]||[]).forEach((r,i)=>{const [type,x,y,w,h]=r,val=state.answers[`${p}:${i}`];if(!val)return;printElement('div',type==='tick'?'print-tick':'print-text',`left:${x}%;top:${y}%;width:${w}%;font-size:${type==='tick'?12:type==='cell'?11:12}px`,type==='tick'?'✓':val,layer)});(state.manual[p]||[]).forEach(m=>printElement('div','print-text',`left:${m.x}%;top:${m.y}%;width:${m.w||12}%;font-size:${Math.max(8,(m.size||27)*.52)}px`,m.text,layer));root.appendChild(container)}note('في نافذة الطباعة اختاري «حفظ بتنسيق PDF». تأكدي من إلغاء الهوامش وتفعيل طباعة الخلفيات عند الحاجة.');setTimeout(()=>window.print(),400)};
-const GOOGLE_SCRIPT_URL='https://script.google.com/macros/s/AKfycbzHnNXtT7FXhmr2o2UjI9cpzZVoSaUHn_JRV2KNxgzb0DKsSeTXCmAi-BfBrinp/exec';
+function old(type,x,y,w,h,label){return {type,x,y,w,h,label};}
+const regions = {
+ // The following narrative pages have no printed answer boxes; retain their previous free-answer areas.
+ 8:[old('text',69,22,23,8,'قصة الأمانة')],
+ 10:[old('text',11,92,76,4,'سؤال الأمانة')],
+ 17:Array.from({length:4},(_,r)=>[
+  box('tick',317,1199+r*43.3,31,31,`صح ${r+1}`),
+  box('tick',212,1199+r*43.3,31,31,`خطأ ${r+1}`)
+ ]).flat(),
+ 19:Array.from({length:5},(_,c)=>Array.from({length:4},(_,r)=>
+  box('tick',[92,205,319,432,545][c],[1126,1171,1216,1261][r],28,29,`النجوم ${c+1}-${r+1}`)
+ )).flat(),
+ 20:[
+  ...[47,94,142,191,239,291,347,398].map((cx,i)=>box('tick',cx,533,34,46,`كوب الماء ${i+1}`)),
+  box('text',215,849,295,43,'سؤال الأسبوع')
+ ],
+ 23:[
+  box('text',219,447,146,30,'لغز العدد 1'),
+  box('text',143,506,60,29,'لغز العدد 2'),
+  box('text',72,573,74,29,'لغز العدد 3'),
+  box('text',552,631,175,30,'لغز العدد 4'),
+  box('text',531,1185,82,31,'أكملي النمط 1'),
+  box('text',529,1237,92,30,'أكملي النمط 2'),
+  box('text',387,1284,172,28,'أكملي النمط 3'),
+  box('text',730,1039,345,31,'الشفرة السرية'),
+  // Pyramid: one input in each printed blank box; printed numbers stay unchanged.
+  box('number',247,837,85,49,'قمة هرم الأرقام'),
+  box('number',194,896,85,51,'هرم الأرقام، الوسط الأيسر'),
+  box('number',296,896,86,51,'هرم الأرقام، الوسط الأيمن'),
+  box('number',247,953,84,51,'هرم الأرقام، الصف الثالث')
+ ],
+ 24:[
+  // Only empty squares. Preprinted ١ ٢ ٣ ٤ ٥ ٦ are NOT editable fields.
+  box('cell',387,427,79,70,'الأفقي الأعلى: المربع 1'),
+  box('cell',551,427,79,70,'الأفقي الأعلى: المربع 2'),
+  box('cell',716,427,78,70,'الأفقي الأعلى: المربع 3'),
+  box('cell',221,501,84,69,'الرأسي الأيسر: المربع 2'),
+  box('cell',221,594,84,104,'الرأسي الأيسر: المربع 3'),
+  box('cell',307,618,77,61,'الأفقي الأيسر: المربع 1'),
+  box('cell',386,618,77,61,'الأفقي الأيسر: المربع 2'),
+  box('cell',469,501,77,68,'الرأسي الثاني: المربع 2'),
+  box('cell',633,501,77,69,'الرأسي الثالث: المربع 2'),
+  box('cell',633,575,77,68,'الرأسي الثالث: المربع 3'),
+  box('cell',633,650,77,68,'الرأسي الثالث: المربع 4'),
+  box('cell',800,501,78,68,'الرأسي الأيمن: المربع 2'),
+  box('cell',800,575,78,67,'الرأسي الأيمن: المربع 3'),
+  box('cell',800,721,78,69,'الرأسي الأيمن: المربع 5')
+ ],
+ // Page 26 is an answer key (a fully completed Sudoku), not an input grid.
+ 27:[old('text',12,80,45,8,'مشاركة الطالبة')]
+};
+const constrainedPages = new Set([17,19,20,23,24]);
+const srcFor = p => `pages/${String(p).padStart(2,'0')}.jpg`;
+const cache = new Map();
+function prefetch(p){
+ if(p<1||p>TOTAL||cache.has(p))return;
+ const pic=new Image();pic.decoding='async';pic.src=srcFor(p);cache.set(p,pic);
+ if(pic.decode)pic.decode().catch(()=>{});
+}
+function warmNeighbors(){
+ [page+1,page-1,page+2,page-2].forEach(prefetch);
+ for(const k of cache.keys())if(Math.abs(k-page)>4)cache.delete(k);
+}
+function idFor(i){return `${page}:${i}`;}
+function persist(){try{localStorage.setItem(KEY,JSON.stringify(state));}catch(e){console.warn('Could not store answers',e);}}
+function note(msg){$('notice').textContent=msg;}
+function setMode(m){
+ mode=m;
+ overlay.className='overlay '+(m==='write'?'write-mode':m==='check'?'check-mode':'');
+ for(const [id,v] of [['write','write'],['check','check'],['cancel','browse']])$(id).classList.toggle('active',v===m);
+}
+function markBox(el,reg){
+ el.style.left=reg.x+'%';el.style.top=reg.y+'%';
+ el.style.width=reg.w+'%';el.style.height=reg.h+'%';
+}
+function addRegion(reg,i,fragment){
+ const key=idFor(i);
+ const tick=reg.type==='tick';
+ const el=document.createElement(tick?'button':'input');
+ el.className=tick?'tick precise-tick':'field precise-field'+(reg.type==='cell'?' cell':reg.type==='number'?' number':'');
+ el.type=tick?'button':'text';
+ el.title=reg.label;
+ el.setAttribute('aria-label',reg.label);
+ markBox(el,reg);
+ if(tick){
+  el.classList.toggle('selected',!!state.answers[key]);
+  el.setAttribute('aria-pressed',String(!!state.answers[key]));
+  el.addEventListener('click',()=>{
+   lastEditedKey=key;state.answers[key]=!state.answers[key];persist();
+   el.classList.toggle('selected',!!state.answers[key]);
+   el.setAttribute('aria-pressed',String(!!state.answers[key]));
+  });
+ } else {
+  el.dir='auto';
+  el.autocomplete='off';el.spellcheck=false;
+  if(reg.type==='cell'){el.maxLength=1;el.enterKeyHint='next';}
+  if(reg.type==='number'){el.maxLength=3;el.inputMode='numeric';}
+  el.value=state.answers[key]||'';
+  el.addEventListener('input',()=>{
+   if(reg.type==='cell')el.value=Array.from(el.value).slice(0,1).join('');
+   if(reg.type==='number')el.value=Array.from(el.value).slice(0,3).join('');
+   lastEditedKey=key;state.answers[key]=el.value;persist();
+  });
+  if(reg.type==='cell')el.addEventListener('keydown',event=>{
+   if(event.key==='Enter'){
+    event.preventDefault();const fields=[...overlay.querySelectorAll('.precise-field.cell')];
+    const at=fields.indexOf(el);if(at>=0&&at+1<fields.length)fields[at+1].focus({preventScroll:true});else el.blur();
+   }
+  });
+ }
+ fragment.appendChild(el);
+}
+function draw(){
+ img.src=srcFor(page);
+ img.alt=`الصفحة ${page} من المجلة`;
+ $('counter').textContent=`${page} / ${TOTAL}`;
+ const frag=document.createDocumentFragment();
+ (regions[page]||[]).forEach((reg,i)=>addRegion(reg,i,frag));
+ // Old freehand marks are preserved in storage. For pages with printed boxes,
+ // don't render loose marks outside the boxes; inputs must use the mapped fields.
+ if(!constrainedPages.has(page)){
+  (state.manual[page]||[]).forEach((m,i)=>{
+   const el=document.createElement('div');el.className='manual';
+   el.style.cssText=`left:${m.x}%;top:${m.y}%;width:${m.w||12}%;min-height:2%`;
+   el.textContent=m.text;
+   el.title='اضغطي لتعديل أو حذف الإضافة';
+   el.onclick=()=>{
+    const v=prompt('عدّلي النص، أو امسحيه بالكامل لحذف الإضافة:',m.text);
+    if(v===null)return;
+    if(v==='')state.manual[page].splice(i,1);else m.text=v;
+    persist();draw();
+   };
+   frag.appendChild(el);
+  });
+ }
+ overlay.replaceChildren(frag);
+ // Let the current image paint first; warm adjacent pages without blocking taps.
+ setTimeout(warmNeighbors,0);
+}
+function go(delta){
+ const target=page+delta;
+ if(target<1||target>TOTAL)return;
+ page=target;draw();
+ // DO NOT scroll: keep exactly the same magazine reading position.
+}
+$('next').addEventListener('click',()=>go(1));
+$('prev').addEventListener('click',()=>go(-1));
+$('write').onclick=()=>setMode('write');
+$('check').onclick=()=>setMode('check');
+$('cancel').onclick=()=>setMode('browse');
+// Large finger-tap tolerance without ever placing a mark outside printed boxes.
+function nearestRegion(x,y,desired){
+ let best=null,score=Infinity;
+ (regions[page]||[]).forEach((r,i)=>{
+  if(desired==='check'&&r.type!=='tick')return;
+  if(desired==='write'&&r.type==='tick')return;
+  const cx=r.x+r.w/2,cy=r.y+r.h/2;
+  const dx=Math.max(0,Math.abs(x-cx)-r.w/2),dy=Math.max(0,Math.abs(y-cy)-r.h/2);
+  // The tolerance extends beyond the small printed checkbox for fingers,
+  // but not so far that a tap on the heading creates a new entry.
+  if(dx>1.6||dy>1.25)return;
+  const s=(dx/1.6)**2+(dy/1.25)**2;
+  if(s<score){score=s;best=i;}
+ });
+ return best;
+}
+overlay.addEventListener('click',e=>{
+ if(e.target!==overlay)return;
+ const b=overlay.getBoundingClientRect();
+ const x=(e.clientX-b.left)*100/b.width;
+ const y=(e.clientY-b.top)*100/b.height;
+ if(constrainedPages.has(page)){
+  const kind=mode==='check'?'check':mode==='write'?'write':null;
+  // In browse mode, nearby targets can still be selected directly.
+  const desired=kind||([17,19,20].includes(page)?'check':'write');
+  const i=nearestRegion(x,y,desired);
+  if(i!==null){
+   const field=overlay.children[i];
+   if(field?.matches('.precise-tick'))field.click();
+   else if(field?.matches('.precise-field'))field.focus({preventScroll:true});
+  }else if(mode!=='browse')note('اختاري المربع أو مكان الإجابة المخصص داخل الصفحة.');
+  return;
+ }
+ if(mode==='browse')return;
+ const text=mode==='check'?'✓':prompt('اكتبي الإجابة التي تريدين إضافتها هنا:');
+ if(text===null||!String(text).trim())return;
+ (state.manual[page]??=[]).push({x:Math.min(92,x),y:Math.min(96,y),text,
+  size:mode==='check'?18:Math.min(24,+$('scale').value),
+  w:mode==='check'?4:Math.min(38,Math.max(12,text.length*2))});
+ persist();draw();setMode('browse');
+});
+$('undo').onclick=()=>{
+ if(constrainedPages.has(page)){
+  // Undo the most recently edited field, without creating a loose mark.
+  if(lastEditedKey?.startsWith(page+':')&&state.answers[lastEditedKey]){
+   delete state.answers[lastEditedKey];lastEditedKey=null;persist();draw();return;
+  }
+  note('حددي المربع الذي تريدين إلغاءه واضغطي عليه، أو امسحي محتواه.');return;
+ }
+ const a=state.manual[page]||[];
+ if(a.length){a.pop();persist();draw();}else note('لا توجد إضافات يدوية لحذفها في هذه الصفحة.');
+};
+$('reset').onclick=()=>{
+ if(confirm('هل تريدين حذف جميع الإجابات المحفوظة على هذا الجهاز؟')){
+  state={answers:{},manual:{}};persist();draw();
+ }
+};
+function printElement(tag,cl,css,txt,parent){
+ const el=document.createElement(tag);el.className=cl;el.style.cssText=css;el.textContent=txt;parent.appendChild(el);
+}
+$('pdf').onclick=()=>{
+ const root=$('printArea');root.innerHTML='';
+ for(let p=1;p<=TOTAL;p++){
+  const container=document.createElement('div');container.className='print-page';
+  const pic=document.createElement('img');pic.src=srcFor(p);container.appendChild(pic);
+  const layer=document.createElement('div');layer.className='print-layer';container.appendChild(layer);
+  (regions[p]||[]).forEach((r,i)=>{
+   const val=state.answers[`${p}:${i}`];if(!val)return;
+   const size=r.type==='tick'?'font-size:13px;':r.type==='cell'?'font-size:17px;':r.type==='number'?'font-size:17px;':'font-size:13px;';
+   printElement('div','precise-print-answer'+(r.type==='tick'?' precise-print-tick':''),
+    `left:${r.x}%;top:${r.y}%;width:${r.w}%;height:${r.h}%;${size}`,
+    r.type==='tick'?'✓':val,layer);
+  });
+  if(!constrainedPages.has(p))(state.manual[p]||[]).forEach(m=>printElement('div','print-text',
+   `left:${m.x}%;top:${m.y}%;width:${m.w||12}%;font-size:${Math.max(8,(m.size||27)*.52)}px`,m.text,layer));
+  root.appendChild(container);
+ }
+ note('في نافذة الطباعة اختاري «حفظ بتنسيق PDF».');
+ setTimeout(()=>window.print(),400);
+};
 $('save').onclick=async()=>{
- const payload={version:1,submissionId:(globalThis.crypto?.randomUUID?.()||String(Date.now())),submittedAt:new Date().toISOString(),answers:{...state.answers,manual:state.manual}};
+ const payload={version:1,submissionId:(globalThis.crypto?.randomUUID?.()||String(Date.now())),
+  submittedAt:new Date().toISOString(),answers:{...state.answers,manual:state.manual}};
  try{
-  // text/plain avoids the cross-origin preflight; body matches doPost's JSON.parse(e.postData.contents).
-  await fetch(GOOGLE_SCRIPT_URL,{method:'POST',mode:'no-cors',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(payload)});
-  note('تم الحفظ');
+  await fetch(GOOGLE_SCRIPT_URL,{method:'POST',mode:'no-cors',
+   headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(payload)});
+  note('تم الحفظ'); // No-cors: the server acknowledgement cannot be read from the browser.
  }catch(e){note('تم الحفظ على هذا الجهاز، وتعذر المزامنة حاليًا.');}
 };
-window.addEventListener('keydown',e=>{if(['INPUT','TEXTAREA'].includes(document.activeElement.tagName))return;if(e.key==='ArrowLeft')$('next').click();if(e.key==='ArrowRight')$('prev').click()});setMode('browse');draw();
+window.addEventListener('keydown',e=>{
+ if(['INPUT','TEXTAREA'].includes(document.activeElement?.tagName))return;
+ if(e.key==='ArrowLeft')go(1);
+ if(e.key==='ArrowRight')go(-1);
+});
+setMode('browse');
+img.decoding='async';
+// Start requesting the next image immediately, before the first user tap.
+[1,2,3].forEach(prefetch);
+draw();
