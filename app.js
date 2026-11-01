@@ -6,6 +6,60 @@ const $ = id => document.getElementById(id);
 const img = $('pageImage');
 const overlay = $('overlay');
 let page = 1, mode = 'browse';
+// Page-flip audio is separate from saved answers and does not affect page layout.
+const TURN_SOUND_KEY = 'madrasatuna-page-flip-sound';
+let turnSoundEnabled = true;
+try { turnSoundEnabled = localStorage.getItem(TURN_SOUND_KEY) !== 'off'; } catch (_) {}
+let turnAudioContext = null;
+let turnAudioBuffer = null;
+function playTurnSound(){
+ if(!turnSoundEnabled)return;
+ try{
+  const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+  if(!AudioContextClass)return;
+  if(!turnAudioContext)turnAudioContext = new AudioContextClass();
+  if(turnAudioContext.state === 'suspended')turnAudioContext.resume().catch(()=>{});
+  if(!turnAudioBuffer){
+   const length=Math.ceil(turnAudioContext.sampleRate*.23);
+   turnAudioBuffer=turnAudioContext.createBuffer(1,length,turnAudioContext.sampleRate);
+   const samples=turnAudioBuffer.getChannelData(0);
+   // A short, quiet paper-rustle sound; no external audio file needed.
+   for(let i=0;i<length;i++)samples[i]=(Math.random()*2-1);
+  }
+  const t=turnAudioContext.currentTime+.008;
+  const source=turnAudioContext.createBufferSource();source.buffer=turnAudioBuffer;
+  const filter=turnAudioContext.createBiquadFilter();filter.type='bandpass';filter.Q.value=.65;
+  filter.frequency.setValueAtTime(1650,t);
+  filter.frequency.exponentialRampToValueAtTime(610,t+.21);
+  const gain=turnAudioContext.createGain();
+  gain.gain.setValueAtTime(.0001,t);
+  gain.gain.linearRampToValueAtTime(.095,t+.025);
+  gain.gain.exponentialRampToValueAtTime(.0001,t+.21);
+  source.connect(filter);filter.connect(gain);gain.connect(turnAudioContext.destination);
+  source.start(t);source.stop(t+.22);
+ }catch(_){/* Audio is optional; navigation must always work. */}
+}
+// Replace ONLY the now-unnecessary writing-size slider with a sound switch.
+// Existing overlays, checkmarks, and all other buttons are left untouched.
+const fontSizeSlider = $('scale');
+const fixedManualWritingSize = Math.min(24,Number(fontSizeSlider?.value ?? 27));
+if(fontSizeSlider){
+ const soundButton=document.createElement('button');
+ soundButton.id='turnSound';soundButton.type='button';soundButton.className='tool';
+ soundButton.style.cssText='border-radius:999px;background:#eaf4fb;color:#254768;padding:10px 14px;';
+ const refreshSoundButton=()=>{
+  soundButton.textContent=turnSoundEnabled?'🔊 صوت التقليب: يعمل':'🔇 صوت التقليب: متوقف';
+  soundButton.setAttribute('aria-pressed',String(turnSoundEnabled));
+  soundButton.title=turnSoundEnabled?'اضغطي لإيقاف صوت تقليب الصفحات':'اضغطي لتشغيل صوت تقليب الصفحات';
+ };
+ soundButton.addEventListener('click',()=>{
+  turnSoundEnabled=!turnSoundEnabled;
+  try{localStorage.setItem(TURN_SOUND_KEY,turnSoundEnabled?'on':'off');}catch(_){}
+  refreshSoundButton();
+ });
+ fontSizeSlider.closest('.setting').replaceWith(soundButton);
+ refreshSoundButton();
+}
 let lastEditedKey = null;
 let state;
 try { state = JSON.parse(localStorage.getItem(KEY) || '{}'); } catch { state = {}; }
@@ -189,9 +243,85 @@ function draw(){
  // Let the current image paint first; warm adjacent pages without blocking taps.
  setTimeout(warmNeighbors,0);
 }
+// Visual page-turn effect ONLY. All page images, answer overlays, storage,
+// navigation targets and controls retain their existing behavior.
+function showPageTurn(direction){
+ const wrap=$('pageWrap');
+ wrap.querySelector('.magazine-turn-layer')?.remove();
+ // Respect accessibility settings; without animation navigation is unchanged.
+ if(window.matchMedia?.('(prefers-reduced-motion: reduce)').matches)return;
+ if(!document.getElementById('magazine-turn-style')){
+  const style=document.createElement('style');
+  style.id='magazine-turn-style';
+  style.textContent=`
+   .magazine-turn-layer{position:absolute;inset:0;z-index:30;overflow:hidden;
+     perspective:1100px;-webkit-perspective:1100px;pointer-events:none;isolation:isolate}
+   .magazine-turn-paper{position:absolute;inset:0;line-height:0;
+     -webkit-backface-visibility:hidden;backface-visibility:hidden;
+     transform-style:preserve-3d;-webkit-transform-style:preserve-3d;
+     will-change:transform}
+   .magazine-turn-paper>img{position:absolute;inset:0;width:100%;height:100%;
+     display:block;object-fit:fill;max-width:none}
+   .magazine-turn-paper>.overlay{pointer-events:none}
+   .magazine-turn-paper>.overlay *{pointer-events:none!important}
+   .magazine-turn-paper::after{content:'';position:absolute;inset:0;
+     pointer-events:none;opacity:.8}
+   .magazine-turn-next{transform-origin:left center;
+     -webkit-transform-origin:left center;
+     animation:magazine-next-page .44s cubic-bezier(.28,.05,.65,1) both}
+   .magazine-turn-next::after{background:linear-gradient(90deg,
+     transparent 57%,rgba(0,0,0,.025) 71%,rgba(0,0,0,.23) 100%)}
+   .magazine-turn-prev{transform-origin:right center;
+     -webkit-transform-origin:right center;
+     animation:magazine-prev-page .44s cubic-bezier(.28,.05,.65,1) both}
+   .magazine-turn-prev::after{background:linear-gradient(270deg,
+     transparent 57%,rgba(0,0,0,.025) 71%,rgba(0,0,0,.23) 100%)}
+   @keyframes magazine-next-page{
+     0%{transform:rotateY(0deg)}
+     26%{transform:rotateY(-17deg)}
+     68%{transform:rotateY(-73deg)}
+     100%{transform:rotateY(-178deg)}
+   }
+   @keyframes magazine-prev-page{
+     0%{transform:rotateY(0deg)}
+     26%{transform:rotateY(17deg)}
+     68%{transform:rotateY(73deg)}
+     100%{transform:rotateY(178deg)}
+   }
+  `;
+  document.head.appendChild(style);
+ }
+ const layer=document.createElement('div');
+ layer.className='magazine-turn-layer';
+ layer.setAttribute('aria-hidden','true');
+ layer.inert=true;
+ const sheet=document.createElement('div');
+ sheet.className='magazine-turn-paper '+(direction>0?'magazine-turn-next':'magazine-turn-prev');
+ const formerImage=document.createElement('img');
+ formerImage.src=img.currentSrc||img.src;
+ formerImage.alt='';
+ sheet.appendChild(formerImage);
+ // Preserve visual appearance of written answers on the turning sheet.
+ const formerOverlay=overlay.cloneNode(true);
+ formerOverlay.removeAttribute('id');
+ const currentInputs=overlay.querySelectorAll('input');
+ formerOverlay.querySelectorAll('input').forEach((field,i)=>{
+  field.value=currentInputs[i]?.value||'';
+  field.tabIndex=-1;
+ });
+ sheet.appendChild(formerOverlay);
+ layer.appendChild(sheet);
+ wrap.appendChild(layer);
+ const done=()=>layer.remove();
+ sheet.addEventListener('animationend',done,{once:true});
+ // Cleanup also covers Safari when the animation is interrupted.
+ setTimeout(done,600);
+}
 function go(delta){
  const target=page+delta;
  if(target<1||target>TOTAL)return;
+ playTurnSound();
+ showPageTurn(delta);
  page=target;draw();
  // DO NOT scroll: keep exactly the same magazine reading position.
 }
@@ -237,7 +367,7 @@ overlay.addEventListener('click',e=>{
  const text=mode==='check'?'✓':prompt('اكتبي الإجابة التي تريدين إضافتها هنا:');
  if(text===null||!String(text).trim())return;
  (state.manual[page]??=[]).push({x:Math.min(92,x),y:Math.min(96,y),text,
-  size:mode==='check'?18:Math.min(24,+$('scale').value),
+  size:mode==='check'?18:fixedManualWritingSize,
   w:mode==='check'?4:Math.min(38,Math.max(12,text.length*2))});
  persist();draw();setMode('browse');
 });
