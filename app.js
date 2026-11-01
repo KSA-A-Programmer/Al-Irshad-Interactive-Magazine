@@ -119,7 +119,16 @@ const regions = {
   box('cell',633,650,77,68,'الرأسي الثالث: المربع 4'),
   box('cell',800,501,78,68,'الرأسي الأيمن: المربع 2'),
   box('cell',800,575,78,67,'الرأسي الأيمن: المربع 3'),
-  box('cell',800,721,78,69,'الرأسي الأيمن: المربع 5')
+  box('cell',800,721,78,69,'الرأسي الأيمن: المربع 5'),
+  // Numbered squares are ALSO answer squares. Keep the printed clue numbers visible:
+  // place the single-letter input in the lower half of each numbered square.
+  // Append these fields after the original ones to preserve all existing saved answer IDs.
+  box('cell',221,452,53,23,'الرأسي الأيسر: مربع البداية ٤'),
+  box('cell',469,452,53,23,'مربع البداية ٣'),
+  box('cell',633,452,53,23,'مربع البداية ٢'),
+  box('cell',800,452,53,23,'مربع البداية ١'),
+  box('cell',469,600,53,23,'مربع البداية ٥'),
+  box('cell',800,675,53,23,'مربع البداية ٦')
  ],
  // Page 26 is an answer key (a fully completed Sudoku), not an input grid.
  27:[old('text',12,80,45,8,'مشاركة الطالبة')]
