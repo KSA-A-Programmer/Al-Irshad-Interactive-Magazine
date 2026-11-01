@@ -94,6 +94,35 @@ function markBox(el,reg){
  el.style.left=reg.x+'%';el.style.top=reg.y+'%';
  el.style.width=reg.w+'%';el.style.height=reg.h+'%';
 }
+// Scale ONLY typed text to fit inside its original printed answer box.
+// Inputs keep a 16px native font (avoids Safari focus zoom), while a CSS
+// transform reduces their visible text and restores their precise box bounds.
+// Checkbox positions, dimensions and drawing are intentionally untouched.
+const fieldRegions = new WeakMap();
+function fitField(el,reg){
+ const boxRect=$('pageWrap').getBoundingClientRect();
+ if(!boxRect.width || !boxRect.height)return;
+ const width=boxRect.width*reg.w/100;
+ const height=boxRect.height*reg.h/100;
+ const charCount=Math.max(1,Array.from(el.value||'').length);
+ // Leave vertical/horizontal breathing room so digits never clip their cells.
+ const maxByHeight=height*(reg.type==='text'?0.68:0.73);
+ const maxByWidth=width*0.84/(charCount*(reg.type==='text'?0.68:0.75));
+ const maxFont=reg.type==='cell'?16:reg.type==='number'?16:15;
+ const renderedFont=Math.max(1,Math.min(maxByHeight,maxByWidth,maxFont));
+ const factor=Math.max(0.1,Math.min(1,renderedFont/16));
+ // The transformed input's *visible* rectangle remains identical to reg.
+ el.style.width=(reg.w/factor)+'%';
+ el.style.height=(reg.h/factor)+'%';
+ el.style.transform='scale('+factor.toFixed(5)+')';
+ el.style.transformOrigin='top left';
+}
+function fitFields(){
+ overlay.querySelectorAll('.precise-field').forEach(el=>{
+  const reg=fieldRegions.get(el);
+  if(reg)fitField(el,reg);
+ });
+}
 function addRegion(reg,i,fragment){
  const key=idFor(i);
  const tick=reg.type==='tick';
@@ -103,6 +132,7 @@ function addRegion(reg,i,fragment){
  el.title=reg.label;
  el.setAttribute('aria-label',reg.label);
  markBox(el,reg);
+ if(!tick)fieldRegions.set(el,reg);
  if(tick){
   el.classList.toggle('selected',!!state.answers[key]);
   el.setAttribute('aria-pressed',String(!!state.answers[key]));
@@ -120,7 +150,7 @@ function addRegion(reg,i,fragment){
   el.addEventListener('input',()=>{
    if(reg.type==='cell')el.value=Array.from(el.value).slice(0,1).join('');
    if(reg.type==='number')el.value=Array.from(el.value).slice(0,3).join('');
-   lastEditedKey=key;state.answers[key]=el.value;persist();
+   lastEditedKey=key;state.answers[key]=el.value;persist();fitField(el,reg);
   });
   if(reg.type==='cell')el.addEventListener('keydown',event=>{
    if(event.key==='Enter'){
@@ -155,6 +185,7 @@ function draw(){
   });
  }
  overlay.replaceChildren(frag);
+ fitFields();
  // Let the current image paint first; warm adjacent pages without blocking taps.
  setTimeout(warmNeighbors,0);
 }
@@ -263,6 +294,10 @@ window.addEventListener('keydown',e=>{
  if(e.key==='ArrowLeft')go(1);
  if(e.key==='ArrowRight')go(-1);
 });
+// Refit typed answers when the viewport rotates/resizes; never touch ticks.
+if(typeof ResizeObserver!=='undefined'){
+ new ResizeObserver(fitFields).observe($('pageWrap'));
+}else window.addEventListener('resize',fitFields,{passive:true});
 setMode('browse');
 img.decoding='async';
 // Start requesting the next image immediately, before the first user tap.

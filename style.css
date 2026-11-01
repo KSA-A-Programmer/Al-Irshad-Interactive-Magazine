@@ -55,3 +55,15 @@
  }
  .precise-print-tick{color:#067347;font-family:Arial,Tahoma,sans-serif;font-weight:900}
 }
+
+
+/* Correction: restore full magazine width on phones; no artwork edits. */
+@media(max-width:720px){
+ main>.reader{width:100%;min-width:0;align-self:stretch}
+ .reader>.page-wrap{width:100%;max-width:650px;flex:none}
+ .reader>nav{width:100%;max-width:650px}
+}
+/* Answer text only: internal 16px for iOS; visual size fitted in app.js. */
+.page-wrap .precise-field,
+.page-wrap .precise-field.cell,
+.page-wrap .precise-field.number{font-size:16px!important;transform-origin:top left;}
