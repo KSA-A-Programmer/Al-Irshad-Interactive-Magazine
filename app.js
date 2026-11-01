@@ -247,47 +247,38 @@ function draw(){
 // navigation targets and controls retain their existing behavior.
 function showPageTurn(direction){
  const wrap=$('pageWrap');
+ // A rapid second tap cancels only the previous visual animation.
+ if(wrap._finishPageCurl)wrap._finishPageCurl();
  wrap.querySelector('.magazine-turn-layer')?.remove();
- // Respect accessibility settings; without animation navigation is unchanged.
  if(window.matchMedia?.('(prefers-reduced-motion: reduce)').matches)return;
+ const bounds=wrap.getBoundingClientRect();
+ const W=bounds.width,H=bounds.height;
+ if(!W||!H)return;
+ // The rest of the reader, inputs, sound, saved answers and layout stay as-is.
  if(!document.getElementById('magazine-turn-style')){
   const style=document.createElement('style');
   style.id='magazine-turn-style';
   style.textContent=`
    .magazine-turn-layer{position:absolute;inset:0;z-index:30;overflow:hidden;
-     perspective:1100px;-webkit-perspective:1100px;pointer-events:none;isolation:isolate}
-   .magazine-turn-paper{position:absolute;inset:0;line-height:0;
-     -webkit-backface-visibility:hidden;backface-visibility:hidden;
+     pointer-events:none;isolation:isolate;perspective:1450px;-webkit-perspective:1450px;
+     transform-style:preserve-3d;-webkit-transform-style:preserve-3d}
+   .magazine-turn-strip{position:absolute;top:0;height:100%;line-height:0;
      transform-style:preserve-3d;-webkit-transform-style:preserve-3d;
-     will-change:transform}
-   .magazine-turn-paper>img{position:absolute;inset:0;width:100%;height:100%;
-     display:block;object-fit:fill;max-width:none}
-   .magazine-turn-paper>.overlay{pointer-events:none}
-   .magazine-turn-paper>.overlay *{pointer-events:none!important}
-   .magazine-turn-paper::after{content:'';position:absolute;inset:0;
-     pointer-events:none;opacity:.8}
-   .magazine-turn-next{transform-origin:left center;
-     -webkit-transform-origin:left center;
-     animation:magazine-next-page .44s cubic-bezier(.28,.05,.65,1) both}
-   .magazine-turn-next::after{background:linear-gradient(90deg,
-     transparent 57%,rgba(0,0,0,.025) 71%,rgba(0,0,0,.23) 100%)}
-   .magazine-turn-prev{transform-origin:right center;
-     -webkit-transform-origin:right center;
-     animation:magazine-prev-page .44s cubic-bezier(.28,.05,.65,1) both}
-   .magazine-turn-prev::after{background:linear-gradient(270deg,
-     transparent 57%,rgba(0,0,0,.025) 71%,rgba(0,0,0,.23) 100%)}
-   @keyframes magazine-next-page{
-     0%{transform:rotateY(0deg)}
-     26%{transform:rotateY(-17deg)}
-     68%{transform:rotateY(-73deg)}
-     100%{transform:rotateY(-178deg)}
-   }
-   @keyframes magazine-prev-page{
-     0%{transform:rotateY(0deg)}
-     26%{transform:rotateY(17deg)}
-     68%{transform:rotateY(73deg)}
-     100%{transform:rotateY(178deg)}
-   }
+     will-change:transform;pointer-events:none}
+   .magazine-turn-face{position:absolute;inset:0;background-repeat:no-repeat;
+     -webkit-backface-visibility:hidden;backface-visibility:hidden;
+     pointer-events:none;transform:translateZ(.4px)}
+   .magazine-turn-back{transform:rotateY(180deg) translateZ(.4px);
+     -webkit-transform:rotateY(180deg) translateZ(.4px)}
+   .magazine-turn-back::after{content:'';position:absolute;inset:0;
+     background:rgba(255,255,255,.58);pointer-events:none}
+   .magazine-turn-shading{position:absolute;inset:0;pointer-events:none;
+     background:linear-gradient(90deg,rgba(0,0,0,.62),rgba(0,0,0,.12) 27%,
+       rgba(255,255,255,.43) 52%,rgba(0,0,0,.42));opacity:0}
+   .magazine-turn-floor-shadow{position:absolute;top:0;bottom:0;
+     pointer-events:none;background:linear-gradient(90deg,transparent,
+       rgba(0,0,0,.1) 19%,rgba(0,0,0,.35) 50%,rgba(0,0,0,.1) 81%,transparent);
+     filter:blur(9px);opacity:0;will-change:transform,opacity}
   `;
   document.head.appendChild(style);
  }
@@ -295,28 +286,121 @@ function showPageTurn(direction){
  layer.className='magazine-turn-layer';
  layer.setAttribute('aria-hidden','true');
  layer.inert=true;
- const sheet=document.createElement('div');
- sheet.className='magazine-turn-paper '+(direction>0?'magazine-turn-next':'magazine-turn-prev');
- const formerImage=document.createElement('img');
- formerImage.src=img.currentSrc||img.src;
- formerImage.alt='';
- sheet.appendChild(formerImage);
- // Preserve visual appearance of written answers on the turning sheet.
- const formerOverlay=overlay.cloneNode(true);
- formerOverlay.removeAttribute('id');
- const currentInputs=overlay.querySelectorAll('input');
- formerOverlay.querySelectorAll('input').forEach((field,i)=>{
-  field.value=currentInputs[i]?.value||'';
-  field.tabIndex=-1;
- });
- sheet.appendChild(formerOverlay);
- layer.appendChild(sheet);
+ // A visual-only snapshot of answers on the *old* page keeps them on the
+ // turning paper. This canvas never changes the real answer fields or data.
+ let inkURL='';
+ try{
+  const selected=[...overlay.children].filter(el=>
+   (el.matches('.tick')&&el.classList.contains('selected'))||
+   (el.matches('input')&&el.value)||
+   (el.matches('.manual')&&el.textContent));
+  if(selected.length){
+   const canvas=document.createElement('canvas');
+   const ratio=Math.min(window.devicePixelRatio||1,2);
+   canvas.width=Math.round(W*ratio);canvas.height=Math.round(H*ratio);
+   const ctx=canvas.getContext('2d');
+   ctx.scale(ratio,ratio);
+   for(const el of selected){
+    const r=el.getBoundingClientRect();
+    const x=r.left-bounds.left+r.width/2;
+    const y=r.top-bounds.top+r.height/2;
+    if(!Number.isFinite(x)||!Number.isFinite(y))continue;
+    ctx.save();ctx.textAlign='center';ctx.textBaseline='middle';
+    if(el.matches('.tick')){
+     ctx.fillStyle='#08734c';ctx.font=`900 ${Math.max(7,Math.min(r.width,r.height)*.78)}px Arial`;
+     ctx.fillText('✓',x,y);
+    }else{
+     const isManual=el.matches('.manual');
+     const transform=isManual?1:(Number(el.style.transform.match(/scale\(([\d.]+)\)/)?.[1])||1);
+     const font=Math.max(5,(isManual?Math.min(r.height*.74,18):16*transform));
+     ctx.fillStyle=isManual?'#145d9b':'#134e77';
+     ctx.direction='rtl';ctx.font=`700 ${font}px Tahoma,Arial,sans-serif`;
+     ctx.fillText(isManual?el.textContent:el.value,x,y,Math.max(3,r.width-2));
+    }
+    ctx.restore();
+   }
+   inkURL=canvas.toDataURL('image/png');
+  }
+ }catch(_){/* Page flipping must work even without the optional ink snapshot. */}
+ const original=img.currentSrc||img.src;
+ const slices=Math.max(28,Math.min(46,Math.round(W/15)));
+ const step=W/slices;
+ const shadow=document.createElement('div');
+ shadow.className='magazine-turn-floor-shadow';
+ shadow.style.width=`${Math.round(W*.29)}px`;
+ layer.appendChild(shadow);
+ const strips=[];
+ for(let i=0;i<slices;i++){
+  const x=i*step-.45;
+  const strip=document.createElement('div');
+  strip.className='magazine-turn-strip';
+  strip.style.left=x+'px';
+  strip.style.width=(step+.9)+'px';
+  const bg=inkURL?`url("${inkURL}"),url("${original}")`:`url("${original}")`;
+  for(const back of [false,true]){
+   const face=document.createElement('div');
+   face.className='magazine-turn-face'+(back?' magazine-turn-back':'');
+   face.style.backgroundImage=bg;
+   face.style.backgroundSize=inkURL?`${W}px ${H}px,${W}px ${H}px`:`${W}px ${H}px`;
+   face.style.backgroundPosition=inkURL?`${-x}px 0,${-x}px 0`:`${-x}px 0`;
+   const shade=document.createElement('div');shade.className='magazine-turn-shading';
+   face.appendChild(shade);strip.appendChild(face);
+  }
+  strips.push(strip);layer.appendChild(strip);
+ }
  wrap.appendChild(layer);
- const done=()=>layer.remove();
- sheet.addEventListener('animationend',done,{once:true});
- // Cleanup also covers Safari when the animation is interrupted.
- setTimeout(done,600);
+ const forward=direction>0;
+ const bendWidth=.31;
+ const angleAt=(u,front)=>{
+  const raw=(forward?front-u:u-front)/bendWidth;
+  const v=Math.max(0,Math.min(1,raw));
+  return Math.PI*v*v*(3-2*v); // continuous curved page, never a rigid flat flip
+ };
+ function paint(t){
+  const eased=t*t*(3-2*t);
+  const front=forward?(-.04+1.42*eased):(1.04-1.42*eased);
+  let edgeX=forward?W:0,edgeZ=0;
+  const start=forward?slices-1:0;
+  for(let k=0;k<slices;k++){
+   const i=forward?start-k:k;
+   const u=(i+.5)/slices;
+   const angle=angleAt(u,front);
+   const cos=Math.cos(angle),sin=Math.sin(angle);
+   const centerX=edgeX+(forward?-1:1)*step*.5*cos;
+   const centerZ=edgeZ+step*.5*sin;
+   edgeX+=(forward?-1:1)*step*cos;
+   edgeZ+=step*sin;
+   const shiftX=centerX-(i+.5)*step;
+   const degree=(forward?1:-1)*angle*180/Math.PI;
+   strips[i].style.transform=`translate3d(${shiftX.toFixed(2)}px,0,${centerZ.toFixed(2)}px) rotateY(${degree.toFixed(2)}deg)`;
+   const curvature=Math.sin(angle);
+   const shadeOpacity=Math.min(.72,.04+.5*curvature+.13*Math.sin(Math.PI*eased));
+   strips[i].children[0].firstElementChild.style.opacity=shadeOpacity.toFixed(3);
+   strips[i].children[1].lastElementChild.style.opacity=(shadeOpacity*.75).toFixed(3);
+  }
+  // Moving shadow cast onto the page underneath, independent of the artwork.
+  const foldX=Math.max(0,Math.min(W,(forward?front-bendWidth*.42:front+bendWidth*.42)*W));
+  shadow.style.transform=`translate3d(${(foldX-W*.145).toFixed(1)}px,0,0)`;
+  shadow.style.opacity=(Math.sin(Math.PI*eased)*.85).toFixed(3);
+ }
+ let frame=0,ended=false;
+ const finish=()=>{
+  if(ended)return;ended=true;
+  cancelAnimationFrame(frame);layer.remove();
+  if(wrap._finishPageCurl===finish)delete wrap._finishPageCurl;
+ };
+ wrap._finishPageCurl=finish;
+ const startTime=performance.now();
+ const duration=640;
+ const tick=now=>{
+  if(ended)return;
+  const t=Math.min(1,(now-startTime)/duration);
+  paint(t);
+  if(t<1)frame=requestAnimationFrame(tick);else finish();
+ };
+ paint(0);frame=requestAnimationFrame(tick);
 }
+
 function go(delta){
  const target=page+delta;
  if(target<1||target>TOTAL)return;
