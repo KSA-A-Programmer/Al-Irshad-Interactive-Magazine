@@ -120,15 +120,15 @@ const regions = {
   box('cell',800,501,78,68,'الرأسي الأيمن: المربع 2'),
   box('cell',800,575,78,67,'الرأسي الأيمن: المربع 3'),
   box('cell',800,721,78,69,'الرأسي الأيمن: المربع 5'),
-  // Numbered squares are ALSO answer squares. Keep the printed clue numbers visible:
-  // place the single-letter input in the lower half of each numbered square.
-  // Append these fields after the original ones to preserve all existing saved answer IDs.
-  box('cell',221,452,53,23,'الرأسي الأيسر: مربع البداية ٤'),
-  box('cell',469,452,53,23,'مربع البداية ٣'),
-  box('cell',633,452,53,23,'مربع البداية ٢'),
-  box('cell',800,452,53,23,'مربع البداية ١'),
-  box('cell',469,600,53,23,'مربع البداية ٥'),
-  box('cell',800,675,53,23,'مربع البداية ٦')
+  // Numbered squares are also answer squares. Use the same full-cell input
+  // dimensions and font sizing as the empty squares; the typed letter may
+  // cover the printed clue number. Keep these fields last to preserve saved IDs.
+  box('cell',221,427,84,69,'الرأسي الأيسر: مربع البداية ٤',{coverClue:true}),
+  box('cell',469,427,79,70,'مربع البداية ٣',{coverClue:true}),
+  box('cell',633,427,79,70,'مربع البداية ٢',{coverClue:true}),
+  box('cell',800,427,78,70,'مربع البداية ١',{coverClue:true}),
+  box('cell',469,594,77,104,'مربع البداية ٥',{coverClue:true}),
+  box('cell',800,650,78,69,'مربع البداية ٦',{coverClue:true})
  ],
  // Page 26 is an answer key (a fully completed Sudoku), not an input grid.
  27:[old('text',12,80,45,8,'مشاركة الطالبة')]
@@ -210,6 +210,11 @@ function addRegion(reg,i,fragment){
   if(reg.type==='cell'){el.maxLength=1;el.enterKeyHint='next';}
   if(reg.type==='number'){el.maxLength=3;el.inputMode='numeric';}
   el.value=state.answers[key]||'';
+  if(reg.coverClue){
+   const updateClueCover=()=>el.style.setProperty('background-color',el.value?'#fdfcf1':'transparent','important');
+   updateClueCover();
+   el.addEventListener('input',updateClueCover);
+  }
   el.addEventListener('input',()=>{
    if(reg.type==='cell')el.value=Array.from(el.value).slice(0,1).join('');
    if(reg.type==='number')el.value=Array.from(el.value).slice(0,3).join('');
@@ -777,7 +782,7 @@ function go(delta){
  const target=page+delta;
  if(target<1||target>TOTAL)return;
  playTurnSound();
- showPageTurn(-delta);
+ showPageTurn(delta);
  page=target;draw();
  // DO NOT scroll: keep exactly the same magazine reading position.
 }
