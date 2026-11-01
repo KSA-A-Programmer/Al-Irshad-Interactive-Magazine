@@ -245,7 +245,370 @@ function draw(){
 }
 // Visual page-turn effect ONLY. All page images, answer overlays, storage,
 // navigation targets and controls retain their existing behavior.
+// Visual effect only: a diagonal, physically curled paper mesh with live perspective,
+// a pale reverse side, specular folds and a soft moving cast shadow.  It never alters
+// the actual page/answer DOM: page navigation and saved answers remain unchanged.
 function showPageTurn(direction){
+ const wrap=$('pageWrap');
+ if(wrap._finishPageCurl)wrap._finishPageCurl();
+ wrap.querySelector('.magazine-turn-layer')?.remove();
+ if(window.matchMedia?.('(prefers-reduced-motion: reduce)').matches)return;
+ const bounds=wrap.getBoundingClientRect();
+ const W=bounds.width,H=bounds.height;
+ if(W<2||H<2||!img.complete||!img.naturalWidth){
+  showPageTurnCanvas(direction);return;
+ }
+ // WebGL is used only for this temporary visual layer.  A plain CSS page turn
+ // remains available if the browser/GPU disables WebGL.
+ const layer=document.createElement('div');
+ layer.className='magazine-turn-layer';
+ layer.setAttribute('aria-hidden','true');
+ layer.inert=true;
+ layer.style.cssText='position:absolute;inset:0;overflow:hidden;z-index:30;pointer-events:none;isolation:isolate;';
+ const shadow=document.createElement('div');
+ shadow.style.cssText='position:absolute;top:-2%;height:104%;width:26%;pointer-events:none;opacity:0;filter:blur(13px);background:linear-gradient(90deg,transparent 0%,rgba(0,0,0,.12) 26%,rgba(0,0,0,.38) 57%,rgba(0,0,0,.16) 76%,transparent 100%);will-change:transform,opacity;';
+ const canvas=document.createElement('canvas');
+ const pixelRatio=Math.min(window.devicePixelRatio||1,2);
+ canvas.width=Math.max(2,Math.round(W*pixelRatio));
+ canvas.height=Math.max(2,Math.round(H*pixelRatio));
+ canvas.style.cssText='position:absolute;inset:0;display:block;width:100%;height:100%;pointer-events:none;';
+ const gl=canvas.getContext('webgl',{alpha:true,antialias:true,depth:true,stencil:false,premultipliedAlpha:false,preserveDrawingBuffer:false}) ||
+          canvas.getContext('experimental-webgl',{alpha:true,antialias:true,depth:true,premultipliedAlpha:false});
+ if(!gl){showPageTurnCanvas(direction);return;}
+ const vertexShaderSource=`
+  attribute vec3 aPosition;
+  attribute vec2 aUV;
+  attribute float aShade;
+  attribute float aBack;
+  varying vec2 vUV;
+  varying float vShade;
+  varying float vBack;
+  void main(){
+    gl_Position=vec4(aPosition,1.0);
+    vUV=aUV;vShade=aShade;vBack=aBack;
+  }`;
+ const fragmentShaderSource=`
+  precision mediump float;
+  uniform sampler2D uPage;
+  varying vec2 vUV;
+  varying float vShade;
+  varying float vBack;
+  void main(){
+    vec4 paper=texture2D(uPage,vUV);
+    // Light shining through the reverse face of a thin paper sheet.
+    vec3 color=mix(paper.rgb,vec3(0.975,0.970,0.948),vBack*0.38);
+    gl_FragColor=vec4(clamp(color*vShade,0.0,1.0),1.0);
+  }`;
+ function shader(type,source){
+  const s=gl.createShader(type);gl.shaderSource(s,source);gl.compileShader(s);
+  if(!gl.getShaderParameter(s,gl.COMPILE_STATUS))throw Error(gl.getShaderInfoLog(s)||'shader error');
+  return s;
+ }
+ let program,buffer,indexBuffer,texture,raf=0,finished=false;
+ try{
+  const vs=shader(gl.VERTEX_SHADER,vertexShaderSource);
+  const fs=shader(gl.FRAGMENT_SHADER,fragmentShaderSource);
+  program=gl.createProgram();gl.attachShader(program,vs);gl.attachShader(program,fs);
+  gl.linkProgram(program);gl.deleteShader(vs);gl.deleteShader(fs);
+  if(!gl.getProgramParameter(program,gl.LINK_STATUS))throw Error('program link failed');
+  gl.useProgram(program);
+  buffer=gl.createBuffer();indexBuffer=gl.createBuffer();texture=gl.createTexture();
+  gl.activeTexture(gl.TEXTURE0);gl.bindTexture(gl.TEXTURE_2D,texture);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
+  // The turning sheet includes a VISUAL snapshot of entered answers and ticks,
+  // so the ink follows the paper.  The real fields are not touched.
+  let source=img;
+  const marked=[...overlay.children].filter(el=>
+   (el.matches('.tick')&&el.classList.contains('selected'))||
+   (el.matches('input')&&el.value)||
+   (el.matches('.manual')&&el.textContent));
+  if(marked.length){
+   try{
+    const snapshot=document.createElement('canvas');
+    const iw=img.naturalWidth,ih=img.naturalHeight;
+    snapshot.width=iw;snapshot.height=ih;
+    const ctx=snapshot.getContext('2d');
+    ctx.drawImage(img,0,0,iw,ih);
+    ctx.scale(iw/W,ih/H);
+    for(const el of marked){
+     const r=el.getBoundingClientRect();
+     const x=r.left-bounds.left+r.width/2,y=r.top-bounds.top+r.height/2;
+     ctx.save();ctx.textAlign='center';ctx.textBaseline='middle';
+     if(el.matches('.tick')){
+      ctx.fillStyle='#08734c';ctx.font=`900 ${Math.max(7,Math.min(r.width,r.height)*.78)}px Arial`;
+      ctx.fillText('✓',x,y);
+     }else{
+      const manual=el.matches('.manual');
+      const scale=manual?1:(Number(el.style.transform.match(/scale\(([-\d.]+)\)/)?.[1])||1);
+      const font=Math.max(5,manual?Math.min(r.height*.74,18):16*scale);
+      ctx.fillStyle=manual?'#145d9b':'#134e77';
+      ctx.direction='rtl';ctx.font=`700 ${font}px Tahoma,Arial,sans-serif`;
+      ctx.fillText(manual?el.textContent:el.value,x,y,Math.max(3,r.width-2));
+     }
+     ctx.restore();
+    }
+    source=snapshot;
+   }catch(_){source=img;}
+  }
+  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,true);
+  gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,source);
+  gl.uniform1i(gl.getUniformLocation(program,'uPage'),0);
+  gl.enable(gl.DEPTH_TEST);gl.depthFunc(gl.LEQUAL);
+  gl.disable(gl.BLEND);gl.disable(gl.CULL_FACE);
+  gl.viewport(0,0,canvas.width,canvas.height);
+ }catch(error){
+  console.warn('Page curl WebGL fallback:',error);
+  gl.getExtension('WEBGL_lose_context')?.loseContext();
+  showPageTurnCanvas(direction);return;
+ }
+ const COLS=84,ROWS=42,STRIDE=7;
+ const array=new Float32Array((COLS+1)*(ROWS+1)*STRIDE);
+ const indices=new Uint16Array(COLS*ROWS*6);
+ let ix=0;
+ for(let row=0;row<ROWS;row++)for(let col=0;col<COLS;col++){
+  const n=row*(COLS+1)+col;
+  // Same winding all the way through; the mesh itself folds back on the page.
+  indices[ix++]=n;indices[ix++]=n+1;indices[ix++]=n+COLS+1;
+  indices[ix++]=n+1;indices[ix++]=n+COLS+2;indices[ix++]=n+COLS+1;
+ }
+ gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,indexBuffer);
+ gl.bufferData(gl.ELEMENT_ARRAY_BUFFER,indices,gl.STATIC_DRAW);
+ gl.bindBuffer(gl.ARRAY_BUFFER,buffer);
+ gl.bufferData(gl.ARRAY_BUFFER,array.byteLength,gl.DYNAMIC_DRAW);
+ const stride=STRIDE*4;
+ for(const [name,size,offset] of [['aPosition',3,0],['aUV',2,3],['aShade',1,5],['aBack',1,6]]){
+  const loc=gl.getAttribLocation(program,name);if(loc<0)continue;
+  gl.enableVertexAttribArray(loc);gl.vertexAttribPointer(loc,size,gl.FLOAT,false,stride,offset*4);
+ }
+ layer.appendChild(shadow);layer.appendChild(canvas);
+ wrap.appendChild(layer);
+ const forward=direction>0;
+ const duration=670;
+ function paint(progress){
+  const ease=progress*progress*(3-2*progress);
+  // The travelling diagonal crease leads at the top, just like real turning paper.
+  const axis=forward?1.14-1.48*ease:-0.14+1.48*ease;
+  let p=0;
+  for(let row=0;row<=ROWS;row++){
+   const y=row/ROWS;
+   const diagonal=0.145*(y-.5)+0.012*Math.sin(Math.PI*y)*Math.sin(Math.PI*ease);
+   const crease=axis+(forward?diagonal:-diagonal);
+   const radius=0.082+0.016*Math.sin(Math.PI*y);
+   const arc=Math.PI*radius;
+   for(let col=0;col<=COLS;col++){
+    const x=col/COLS;
+    const d=forward?x-crease:crease-x;
+    let X=x,Z=0,shading=1,back=0;
+    if(d>0){
+     if(d<arc){
+      const a=d/radius;
+      X=crease+(forward?1:-1)*radius*Math.sin(a);
+      Z=radius*(1-Math.cos(a));
+      // Thin-paper grazing shadows and a moving reflection on the curl.
+      const spec=.16*Math.exp(-Math.pow((a-.55)/.31,2));
+      shading=.79+.17*Math.cos(a)-.13*Math.sin(a)*Math.sin(a)+spec;
+      back=Math.max(0,(a-Math.PI/2)/(Math.PI/2));
+     }else{
+      X=crease+(forward?-1:1)*(d-arc);
+      Z=2*radius;
+      back=1;
+      shading=.84;
+      // A very small corner twist, without changing the underlying page.
+      X+=(forward?-1:1)*0.018*(1-y)*(1-y)*Math.sin(Math.PI*ease);
+     }
+    }
+    const Y=y+(d>0?0.019*Math.sin(Math.PI*y)*Math.sin(Math.PI*ease):0);
+    // Perspective: the raised curl is closer to the viewer than the paper.
+    const zoom=1/(1-.76*Z);
+    const px=.5+(X-.5)*zoom;
+    const py=.5+(Y-.5)*zoom;
+    array[p++]=2*px-1;array[p++]=1-2*py;
+    array[p++]=-Math.min(.48,Z*1.65);
+    array[p++]=x;array[p++]=1-y;
+    array[p++]=shading;array[p++]=back;
+   }
+  }
+  gl.bindBuffer(gl.ARRAY_BUFFER,buffer);
+  gl.bufferSubData(gl.ARRAY_BUFFER,0,array);
+  gl.clearColor(0,0,0,0);
+  gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);
+  gl.drawElements(gl.TRIANGLES,indices.length,gl.UNSIGNED_SHORT,0);
+  // The cast shadow follows the angled fold; no changes to page artwork.
+  const shadowX=Math.max(-.3,Math.min(1.2,axis));
+  shadow.style.transform=`translate3d(${((shadowX-.13)*W).toFixed(1)}px,0,0) skewX(${forward?-6:6}deg)`;
+  shadow.style.opacity=(Math.sin(Math.PI*ease)*.95).toFixed(3);
+ }
+ function finish(){
+  if(finished)return;finished=true;
+  cancelAnimationFrame(raf);layer.remove();
+  try{gl.deleteTexture(texture);gl.deleteBuffer(buffer);gl.deleteBuffer(indexBuffer);gl.deleteProgram(program);}catch(_){}
+  if(wrap._finishPageCurl===finish)delete wrap._finishPageCurl;
+ }
+ wrap._finishPageCurl=finish;
+ const start=performance.now();
+ function frame(now){
+  if(finished)return;
+  const t=Math.min(1,(now-start)/duration);
+  paint(t);
+  if(t<1)raf=requestAnimationFrame(frame);else finish();
+ }
+ paint(0);raf=requestAnimationFrame(frame);
+}
+
+// Canvas 2D path: preserves the same diagonal curl when WebGL is unavailable,
+// especially on in-app browsers.  Again, this is a temporary visual snapshot only.
+function showPageTurnCanvas(direction){
+ const wrap=$('pageWrap');
+ const bounds=wrap.getBoundingClientRect(),W=bounds.width,H=bounds.height;
+ if(W<2||H<2||!img.complete||!img.naturalWidth){
+  showPageTurnFallback(direction);return;
+ }
+ const layer=document.createElement('div');
+ layer.className='magazine-turn-layer';layer.setAttribute('aria-hidden','true');layer.inert=true;
+ layer.style.cssText='position:absolute;inset:0;overflow:hidden;z-index:30;pointer-events:none;';
+ const canvas=document.createElement('canvas');
+ const ratio=Math.min(window.devicePixelRatio||1,2);
+ canvas.width=Math.round(W*ratio);canvas.height=Math.round(H*ratio);
+ canvas.style.cssText='width:100%;height:100%;display:block;pointer-events:none;';
+ const ctx=canvas.getContext('2d',{alpha:true});
+ if(!ctx){showPageTurnFallback(direction);return;}
+ const frozen=document.createElement('canvas');
+ frozen.width=img.naturalWidth;frozen.height=img.naturalHeight;
+ frozen.getContext('2d').drawImage(img,0,0,frozen.width,frozen.height);
+ let texture=frozen;
+ const marked=[...overlay.children].filter(el=>
+  (el.matches('.tick')&&el.classList.contains('selected'))||
+  (el.matches('input')&&el.value)||(el.matches('.manual')&&el.textContent));
+ if(marked.length){
+  try{
+   const copy=document.createElement('canvas');copy.width=img.naturalWidth;copy.height=img.naturalHeight;
+   const c=copy.getContext('2d');c.drawImage(frozen,0,0,copy.width,copy.height);
+   c.scale(copy.width/W,copy.height/H);
+   for(const el of marked){
+    const r=el.getBoundingClientRect(),x=r.left-bounds.left+r.width/2,y=r.top-bounds.top+r.height/2;
+    c.save();c.textAlign='center';c.textBaseline='middle';
+    if(el.matches('.tick')){
+     c.fillStyle='#08734c';c.font=`900 ${Math.max(7,Math.min(r.width,r.height)*.78)}px Arial`;
+     c.fillText('✓',x,y);
+    }else{
+     const manual=el.matches('.manual');
+     const scale=manual?1:(Number(el.style.transform.match(/scale\(([-\d.]+)\)/)?.[1])||1);
+     c.fillStyle=manual?'#145d9b':'#134e77';c.direction='rtl';
+     c.font=`700 ${Math.max(5,manual?Math.min(r.height*.74,18):16*scale)}px Tahoma,Arial,sans-serif`;
+     c.fillText(manual?el.textContent:el.value,x,y,Math.max(3,r.width-2));
+    }c.restore();
+   }
+   texture=copy;
+  }catch(_){}
+ }
+ const tw=texture.width||texture.naturalWidth,th=texture.height||texture.naturalHeight;
+ const forward=direction>0;
+ const COLS=42,ROWS=16,duration=670;
+ const grid=Array.from({length:ROWS+1},()=>new Array(COLS+1));
+ const cells=[];
+ function position(x,y,axis,ease){
+  const crease=axis+(forward?1:-1)*(0.145*(y-.5)+0.012*Math.sin(Math.PI*y)*Math.sin(Math.PI*ease));
+  const r=.082+.016*Math.sin(Math.PI*y);
+  const d=forward?x-crease:crease-x;
+  let X=x,Z=0,shade=1,back=0;
+  if(d>0){
+   const arc=Math.PI*r;
+   if(d<arc){
+    const angle=d/r;
+    X=crease+(forward?1:-1)*r*Math.sin(angle);
+    Z=r*(1-Math.cos(angle));
+    shade=.79+.17*Math.cos(angle)-.13*Math.sin(angle)**2+
+      .16*Math.exp(-Math.pow((angle-.55)/.31,2));
+    back=Math.max(0,(angle-Math.PI/2)/(Math.PI/2));
+   }else{
+    X=crease+(forward?-1:1)*(d-arc);Z=2*r;shade=.84;back=1;
+    X+=(forward?-1:1)*.018*(1-y)**2*Math.sin(Math.PI*ease);
+   }
+  }
+  const Y=y+(d>0?.019*Math.sin(Math.PI*y)*Math.sin(Math.PI*ease):0);
+  const zoom=1/(1-.76*Z);
+  return {x:(.5+(X-.5)*zoom)*W,y:(.5+(Y-.5)*zoom)*H,z:Z,shade,back};
+ }
+ function render(t){
+  const ease=t*t*(3-2*t);
+  const axis=forward?1.14-1.48*ease:-.14+1.48*ease;
+  ctx.setTransform(ratio,0,0,ratio,0,0);ctx.clearRect(0,0,W,H);
+  if(ease<.006){ctx.drawImage(texture,0,0,W,H);return;}
+  // The soft cast shadow is rendered behind the physical paper mesh.
+  const fx=axis*W;
+  const gradient=ctx.createLinearGradient(fx-W*.10,0,fx+W*.18,0);
+  gradient.addColorStop(0,'rgba(0,0,0,0)');
+  gradient.addColorStop(.38,`rgba(0,0,0,${(.2*Math.sin(Math.PI*ease)).toFixed(3)})`);
+  gradient.addColorStop(.65,`rgba(0,0,0,${(.33*Math.sin(Math.PI*ease)).toFixed(3)})`);
+  gradient.addColorStop(1,'rgba(0,0,0,0)');
+  ctx.save();ctx.translate(fx,0);ctx.transform(1,0,-(forward?.13:-.13)*W/H,1,-fx,0);
+  ctx.fillStyle=gradient;ctx.fillRect(fx-W*.10,0,W*.28,H);ctx.restore();
+  for(let row=0;row<=ROWS;row++)for(let col=0;col<=COLS;col++){
+   grid[row][col]=position(col/COLS,row/ROWS,axis,ease);
+  }
+  cells.length=0;
+  for(let row=0;row<ROWS;row++)for(let col=0;col<COLS;col++){
+   const p0=grid[row][col],p1=grid[row][col+1],p2=grid[row+1][col+1],p3=grid[row+1][col];
+   cells.push({row,col,p0,p1,p2,p3,z:(p0.z+p1.z+p2.z+p3.z)/4,
+    shade:(p0.shade+p1.shade+p2.shade+p3.shade)/4,
+    back:(p0.back+p1.back+p2.back+p3.back)/4});
+  }
+  // Backside of paper is laid down after the flat part; lifted curl above both.
+  cells.sort((a,b)=>a.z-b.z);
+  const du=tw/COLS,dv=th/ROWS;
+  for(const cell of cells){
+   const {row,col,p0,p1,p2,p3}=cell;
+   const sx=col*du,sy=row*dv;
+   ctx.save();
+   // Gently overlap neighboring tiles to prevent subpixel seams during the curl.
+   const mx=(p0.x+p1.x+p2.x+p3.x)/4,my=(p0.y+p1.y+p2.y+p3.y)/4;
+   const overlap=0.85;
+   const extend=q=>({x:q.x+overlap*Math.sign(q.x-mx),
+     y:q.y+overlap*Math.sign(q.y-my)});
+   const q0=extend(p0),q1=extend(p1),q2=extend(p2),q3=extend(p3);
+   ctx.beginPath();ctx.moveTo(q0.x,q0.y);ctx.lineTo(q1.x,q1.y);
+   ctx.lineTo(q2.x,q2.y);ctx.lineTo(q3.x,q3.y);ctx.closePath();ctx.clip();
+   const a=(p1.x-p0.x)/du,b=(p1.y-p0.y)/du,c=(p3.x-p0.x)/dv,d=(p3.y-p0.y)/dv;
+   ctx.setTransform(ratio*a,ratio*b,ratio*c,ratio*d,ratio*(p0.x-a*sx-c*sy),ratio*(p0.y-b*sx-d*sy));
+   const border=2.5;
+   const left=Math.max(0,sx-border),top=Math.max(0,sy-border);
+   const right=Math.min(tw,sx+du+border),bottom=Math.min(th,sy+dv+border);
+   ctx.drawImage(texture,left,top,right-left,bottom-top,left,top,right-left,bottom-top);
+   ctx.restore();
+   if(cell.back>.01){
+    ctx.fillStyle=`rgba(248,246,240,${Math.min(.43,cell.back*.39)})`;
+    ctx.fill();
+   }
+   if(cell.shade<1){
+    ctx.fillStyle=`rgba(0,0,0,${Math.max(0,Math.min(.45,1-cell.shade)).toFixed(3)})`;
+    ctx.fill();
+   }else if(cell.shade>1){
+    ctx.fillStyle=`rgba(255,255,255,${Math.min(.14,cell.shade-1).toFixed(3)})`;
+    ctx.fill();
+   }
+  }
+ }
+ layer.appendChild(canvas);wrap.appendChild(layer);
+ let raf=0,done=false;
+ function finish(){
+  if(done)return;done=true;cancelAnimationFrame(raf);layer.remove();
+  if(wrap._finishPageCurl===finish)delete wrap._finishPageCurl;
+ }
+ wrap._finishPageCurl=finish;
+ const start=performance.now();
+ function frame(now){
+  if(done)return;
+  const t=Math.min(1,(now-start)/duration);
+  render(t);
+  if(t<1)raf=requestAnimationFrame(frame);else finish();
+ }
+ render(0);raf=requestAnimationFrame(frame);
+}
+
+function showPageTurnFallback(direction){
  const wrap=$('pageWrap');
  // A rapid second tap cancels only the previous visual animation.
  if(wrap._finishPageCurl)wrap._finishPageCurl();
