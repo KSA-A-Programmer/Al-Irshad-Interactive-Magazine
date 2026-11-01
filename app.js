@@ -120,15 +120,15 @@ const regions = {
   box('cell',800,501,78,68,'الرأسي الأيمن: المربع 2'),
   box('cell',800,575,78,67,'الرأسي الأيمن: المربع 3'),
   box('cell',800,721,78,69,'الرأسي الأيمن: المربع 5'),
-  // Numbered squares are ALSO answer squares. Keep the printed clue numbers visible:
-  // place the single-letter input in the lower half of each numbered square.
-  // Append these fields after the original ones to preserve all existing saved answer IDs.
-  box('cell',221,452,53,23,'الرأسي الأيسر: مربع البداية ٤'),
-  box('cell',469,452,53,23,'مربع البداية ٣'),
-  box('cell',633,452,53,23,'مربع البداية ٢'),
-  box('cell',800,452,53,23,'مربع البداية ١'),
-  box('cell',469,600,53,23,'مربع البداية ٥'),
-  box('cell',800,675,53,23,'مربع البداية ٦')
+  // Numbered squares are also answer squares. Use the same full-cell input
+  // dimensions and font sizing as the empty squares; the typed letter may
+  // cover the printed clue number. Keep these fields last to preserve saved IDs.
+  box('cell',221,427,84,69,'الرأسي الأيسر: مربع البداية ٤',{coverClue:true}),
+  box('cell',469,427,79,70,'مربع البداية ٣',{coverClue:true}),
+  box('cell',633,427,79,70,'مربع البداية ٢',{coverClue:true}),
+  box('cell',800,427,78,70,'مربع البداية ١',{coverClue:true}),
+  box('cell',469,594,77,104,'مربع البداية ٥',{coverClue:true}),
+  box('cell',800,650,78,69,'مربع البداية ٦',{coverClue:true})
  ],
  // Page 26 is an answer key (a fully completed Sudoku), not an input grid.
  27:[old('text',12,80,45,8,'مشاركة الطالبة')]
@@ -210,6 +210,11 @@ function addRegion(reg,i,fragment){
   if(reg.type==='cell'){el.maxLength=1;el.enterKeyHint='next';}
   if(reg.type==='number'){el.maxLength=3;el.inputMode='numeric';}
   el.value=state.answers[key]||'';
+  if(reg.coverClue){
+   const updateClueCover=()=>el.style.setProperty('background-color',el.value?'#fdfcf1':'transparent','important');
+   updateClueCover();
+   el.addEventListener('input',updateClueCover);
+  }
   el.addEventListener('input',()=>{
    if(reg.type==='cell')el.value=Array.from(el.value).slice(0,1).join('');
    if(reg.type==='number')el.value=Array.from(el.value).slice(0,3).join('');
@@ -305,7 +310,7 @@ function showPageTurn(direction){
   void main(){
     vec4 paper=texture2D(uPage,vUV);
     // Light shining through the reverse face of a thin paper sheet.
-    vec3 color=mix(paper.rgb,vec3(0.975,0.970,0.948),vBack*0.38);
+    vec3 color=mix(paper.rgb,vec3(0.975,0.970,0.948),smoothstep(0.0,0.12,vBack));
     gl_FragColor=vec4(clamp(color*vShade,0.0,1.0),1.0);
   }`;
  function shader(type,source){
@@ -454,6 +459,8 @@ function showPageTurn(direction){
   if(finished)return;finished=true;
   cancelAnimationFrame(raf);layer.remove();
   try{gl.deleteTexture(texture);gl.deleteBuffer(buffer);gl.deleteBuffer(indexBuffer);gl.deleteProgram(program);}catch(_){}
+  // Release the per-turn GPU context on mobile Safari; buffers alone are not sufficient.
+  try{gl.getExtension('WEBGL_lose_context')?.loseContext();}catch(_){}
   if(wrap._finishPageCurl===finish)delete wrap._finishPageCurl;
  }
  wrap._finishPageCurl=finish;
@@ -461,10 +468,10 @@ function showPageTurn(direction){
  function frame(now){
   if(finished)return;
   const t=Math.min(1,(now-start)/duration);
-  paint(t);
+  try{paint(t);}catch(_){finish();return;}
   if(t<1)raf=requestAnimationFrame(frame);else finish();
  }
- paint(0);raf=requestAnimationFrame(frame);
+ try{paint(0);raf=requestAnimationFrame(frame);}catch(_){finish();}
 }
 
 // Canvas 2D path: preserves the same diagonal curl when WebGL is unavailable,
@@ -588,7 +595,7 @@ function showPageTurnCanvas(direction){
    ctx.drawImage(texture,left,top,right-left,bottom-top,left,top,right-left,bottom-top);
    ctx.restore();
    if(cell.back>.01){
-    ctx.fillStyle=`rgba(248,246,240,${Math.min(.43,cell.back*.39)})`;
+    ctx.fillStyle=`rgba(248,246,240,${Math.min(1,cell.back*8)})`;
     ctx.fill();
    }
    if(cell.shade<1){
@@ -643,7 +650,7 @@ function showPageTurnFallback(direction){
    .magazine-turn-back{transform:rotateY(180deg) translateZ(.4px);
      -webkit-transform:rotateY(180deg) translateZ(.4px)}
    .magazine-turn-back::after{content:'';position:absolute;inset:0;
-     background:rgba(255,255,255,.58);pointer-events:none}
+     background:rgba(255,255,255,1);pointer-events:none}
    .magazine-turn-shading{position:absolute;inset:0;pointer-events:none;
      background:linear-gradient(90deg,rgba(0,0,0,.62),rgba(0,0,0,.12) 27%,
        rgba(255,255,255,.43) 52%,rgba(0,0,0,.42));opacity:0}
@@ -773,13 +780,33 @@ function showPageTurnFallback(direction){
  paint(0);frame=requestAnimationFrame(tick);
 }
 
+let pendingPageLoad = null;
 function go(delta){
  const target=page+delta;
  if(target<1||target>TOTAL)return;
- playTurnSound();
- showPageTurn(-delta);
- page=target;draw();
- // DO NOT scroll: keep exactly the same magazine reading position.
+ const origin=page;
+ pendingPageLoad=target;
+ // Keep the current image visible until the next image has fully loaded.
+ prefetch(target);
+ let nextImage=cache.get(target);
+ if(nextImage.complete && !nextImage.naturalWidth){
+  // A previously failed preload must never lead to a blank magazine page.
+  cache.delete(target);prefetch(target);nextImage=cache.get(target);
+ }
+ const switchPage=()=>{
+  // A later navigation supersedes any older image-load callback.
+  if(page!==origin || pendingPageLoad!==target)return;
+  pendingPageLoad=null;
+  playTurnSound();
+  showPageTurn(-delta);
+  page=target;draw();
+  // DO NOT scroll: keep exactly the same magazine reading position.
+ };
+ if(nextImage.complete && nextImage.naturalWidth){switchPage();return;}
+ nextImage.addEventListener('load',switchPage,{once:true});
+ nextImage.addEventListener('error',()=>{
+  if(pendingPageLoad===target)pendingPageLoad=null;
+ },{once:true});
 }
 $('next').addEventListener('click',()=>go(1));
 $('prev').addEventListener('click',()=>go(-1));
